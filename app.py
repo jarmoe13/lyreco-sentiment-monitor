@@ -22,7 +22,7 @@ def load_model():
                     tokenizer="cardiffnlp/twitter-xlm-roberta-base-sentiment")
 
 try:
-    with st.spinner("Ładowanie silnika AI..."):
+    with st.spinner("Initializing AI Engine..."):
         sentiment_pipeline = load_model()
 except: pass
 
@@ -43,16 +43,16 @@ def analyze_sentiment(df):
 
 def fetch_massive_data(market_code, lang, api_key):
     """
-    Strategia 'Verticals': Pobieramy dane tematami, żeby zwiększyć wolumen.
+    'Verticals' Strategy: Fetching data by distinct topics to maximize volume.
     """
     url = "https://google.serper.dev/search"
     all_items = []
     
-    # Lista tematów - to nam pomnoży wyniki x4
+    # Topic list - multiplies results x4 per country
     topics = {
-        "General": "Lyreco",
-        "HR & Career": f"Lyreco {lang == 'pl' and 'praca opinie' or 'careers reviews'}",
-        "Logistics": f"Lyreco {lang == 'pl' and 'dostawa problem' or 'delivery issues'}",
+        "General Brand": "Lyreco",
+        "HR & Careers": f"Lyreco {lang == 'pl' and 'praca opinie' or 'careers reviews'}",
+        "Logistics & Ops": f"Lyreco {lang == 'pl' and 'dostawa problem' or 'delivery issues'}",
         "CSR & Sustainability": f"Lyreco {lang == 'pl' and 'ekologia' or 'sustainability'}"
     }
 
@@ -63,15 +63,15 @@ def fetch_massive_data(market_code, lang, api_key):
             "q": query,
             "gl": market_code,
             "hl": lang,
-            "num": 40,      # Zwiększamy do 40 wyników na strzał!
-            "tbs": "qdr:m12" # Szukamy 12 miesięcy wstecz (więcej danych)
+            "num": 40,       # Maximize fetch size
+            "tbs": "qdr:m12" # Lookback 12 months
         })
 
         try:
             response = requests.request("POST", url, headers=headers, data=payload)
             results = response.json()
             
-            # Organic
+            # Organic Results
             if 'organic' in results:
                 for r in results['organic']:
                     all_items.append({
@@ -81,7 +81,7 @@ def fetch_massive_data(market_code, lang, api_key):
                         'Snippet': r.get('snippet', ''),
                         'Source': 'Web'
                     })
-            # News (jeśli są)
+            # News Results
             if 'news' in results:
                 for r in results['news']:
                     all_items.append({
@@ -95,13 +95,21 @@ def fetch_massive_data(market_code, lang, api_key):
         
     return all_items
 
-# --- UI ---
+# --- UI LAYOUT ---
 st.title("📈 Lyreco Global: Big Data Volume Monitor")
-st.markdown("Tryb: **Massive Fetch** (General + HR + Logistics + CSR)")
+st.markdown("""
+This dashboard uses a **Multi-Vertical Scanning Strategy** to gather maximum intelligence volume. 
+Instead of a simple keyword search, it penetrates 4 key operational pillars for each market: 
+**General Brand, HR/Careers, Logistics, and Sustainability**.
+""")
 
 with st.sidebar:
+    st.header("⚙️ Configuration")
+    
     if not API_KEY:
-        API_KEY = st.text_input("API Key:", type="password")
+        API_KEY = st.text_input("Enter Serper API Key:", type="password")
+    
+    st.markdown("---")
     
     MARKETS = {
         "France 🇫🇷": {"code": "fr", "lang": "fr"},
@@ -109,19 +117,31 @@ with st.sidebar:
         "UK 🇬🇧": {"code": "gb", "lang": "en"},
         "Italy 🇮🇹": {"code": "it", "lang": "it"},
         "Germany 🇩🇪": {"code": "de", "lang": "de"},
+        "Spain 🇪🇸": {"code": "es", "lang": "es"},
+        "Benelux 🇧🇪🇳🇱": {"code": "be", "lang": "nl"},
     }
     
-    selected_markets = st.multiselect("Rynki:", list(MARKETS.keys()), default=["France 🇫🇷", "Poland 🇵🇱"])
-    st.warning("⚠️ Uwaga: Ten tryb zużywa więcej kredytów API (4 zapytania na kraj).")
-    run_btn = st.button("🚀 POBIERZ DUŻO DANYCH", type="primary")
+    selected_markets = st.multiselect("Select Markets:", list(MARKETS.keys()), default=["France 🇫🇷", "Poland 🇵🇱"])
+    
+    st.info("""
+    ℹ️ **How it works:**
+    For every selected market, the system executes 4 distinct deep-searches (General, HR, Ops, CSR) looking back 12 months.
+    
+    **Expect ~100-150 data points per market.**
+    """)
+    
+    st.warning("⚠️ Warning: This mode consumes 4 API credits per selected market.")
+    
+    run_btn = st.button("🚀 FETCH MASSIVE DATA", type="primary")
 
 if run_btn and API_KEY:
     full_data = []
     progress = st.progress(0)
+    status_text = st.empty()
     
     for i, market in enumerate(selected_markets):
         config = MARKETS[market]
-        st.toast(f"Pobieranie: {market} (4 kategorie)...")
+        status_text.text(f"📡 Scanning ecosystem: {market}...")
         
         data = fetch_massive_data(config['code'], config['lang'], API_KEY)
         
@@ -131,36 +151,68 @@ if run_btn and API_KEY:
             
         progress.progress((i + 1) / len(selected_markets))
         
+    status_text.empty()
+    progress.empty()
+        
     if full_data:
         df = pd.DataFrame(full_data)
-        # Usuwamy duplikaty (bo w różnych kategoriach mogło znaleźć to samo)
         df = df.drop_duplicates(subset=['Title'])
         
-        with st.spinner(f"Analiza AI dla {len(df)} rekordów..."):
+        with st.spinner(f"🧠 AI analyzing sentiment for {len(df)} records..."):
             df = analyze_sentiment(df)
             
-        # --- DASHBOARD ---
+        # --- KPI BOARD ---
         k1, k2, k3 = st.columns(3)
-        k1.metric("Zebrane Dane (Total)", len(df))
-        k2.metric("Rynki", len(selected_markets))
-        k3.metric("Dominujący Temat", df['Category'].mode()[0])
+        k1.metric("Total Data Points", len(df))
+        k2.metric("Active Markets", len(selected_markets))
+        k3.metric("Dominant Topic", df['Category'].mode()[0])
         
         st.divider()
         
+        # --- CHARTS ---
         c1, c2 = st.columns(2)
         with c1:
-            st.subheader("Rozkład wg Kategorii")
-            fig = px.treemap(df, path=['Market', 'Category'], color='Category')
+            st.subheader("📊 Volume by Category")
+            st.caption("Visualizes the volume of discussion across operational pillars. Colors represent categories, not sentiment.")
+            
+            # Using a distinct color sequence for categories to avoid confusion with sentiment
+            fig = px.treemap(
+                df, 
+                path=['Market', 'Category'], 
+                color='Category',
+                color_discrete_sequence=px.colors.qualitative.Bold # Distinct, non-sentiment colors
+            )
             st.plotly_chart(fig, use_container_width=True)
             
         with c2:
-            st.subheader("Sentyment Globalny")
-            fig2 = px.pie(df, names='sentiment', color='sentiment', 
-                          color_discrete_map={'Positive':'#00CC96', 'Negative':'#EF553B', 'Neutral':'#cccccc'})
+            st.subheader("❤️ Global Sentiment")
+            st.caption("AI-driven emotional analysis of all collected data points.")
+            
+            # Ensuring Neutral is GRAY as requested
+            fig2 = px.pie(
+                df, 
+                names='sentiment', 
+                color='sentiment', 
+                color_discrete_map={
+                    'Positive':'#00CC96', 
+                    'Negative':'#EF553B', 
+                    'Neutral':'#cccccc' # Gray
+                }
+            )
             st.plotly_chart(fig2, use_container_width=True)
             
-        st.subheader("Baza Danych")
-        st.dataframe(df, use_container_width=True)
+        # --- DATA TABLE ---
+        st.subheader("🗄️ Intelligence Database")
+        st.dataframe(
+            df[['Market', 'Category', 'Title', 'sentiment', 'Link']],
+            column_config={
+                "Link": st.column_config.LinkColumn("Source URL")
+            },
+            use_container_width=True
+        )
         
     else:
-        st.error("Brak danych.")
+        st.error("No data found. Please check your API limits or try different markets.")
+
+elif run_btn and not API_KEY:
+    st.error("Please provide an API Key in the sidebar.")
