@@ -156,7 +156,7 @@ if run_btn and API_KEY:
         with c2:
             st.subheader("Sentyment Globalny")
             fig2 = px.pie(df, names='sentiment', color='sentiment', 
-                          color_discrete_map={'Positive':'#00CC96', 'Negative':'#EF553B', 'Neutral':'#AB63FA'})
+                          color_discrete_map={'Positive':'#00CC96', 'Negative':'#EF553B', 'Neutral':'#cccccc'})
             st.plotly_chart(fig2, use_container_width=True)
             
         st.subheader("Baza Danych")
