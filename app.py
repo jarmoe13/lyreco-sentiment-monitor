@@ -1,25 +1,25 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from pygooglenews import GoogleNews
-from duckduckgo_search import DDGS
+import requests
+import json
 from transformers import pipeline
-import time
+from datetime import datetime
 
 # --- CONFIG ---
-st.set_page_config(page_title="Lyreco Sentinel AI", layout="wide", page_icon="🌍")
+st.set_page_config(page_title="Lyreco Intel [PRO]", layout="wide", page_icon="💎")
 
-# --- CUSTOM STYLES ---
-st.markdown("""
-<style>
-    .metric-card {background-color: #f0f2f6; border-radius: 10px; padding: 20px;}
-</style>
-""", unsafe_allow_html=True)
+# --- API SETUP ---
+# Próbujemy pobrać klucz z sekretów Streamlit Cloud
+try:
+    API_KEY = st.secrets["SERPER_API_KEY"]
+except:
+    # Fallback dla testów lokalnych lub gdy sekret nie jest ustawiony
+    API_KEY = None
 
-# --- AI MODEL LOADING ---
+# --- AI MODEL ---
 @st.cache_resource
 def load_model():
-    # Multilingual model (XLM-RoBERTa) - works for EN, PL, FR, DE, etc.
     return pipeline("sentiment-analysis", 
                     model="cardiffnlp/twitter-xlm-roberta-base-sentiment", 
                     tokenizer="cardiffnlp/twitter-xlm-roberta-base-sentiment")
@@ -27,149 +27,163 @@ def load_model():
 try:
     with st.spinner("Initializing AI Engine..."):
         sentiment_pipeline = load_model()
-except Exception as e:
-    st.error(f"Critical Error loading model: {e}")
+except: pass
 
-# --- CORE LOGIC ---
-def map_label(label):
-    label = str(label).lower()
-    if 'label_0' in label or 'neg' in label: return 'Negative'
-    if 'label_1' in label or 'neu' in label: return 'Neutral'
-    if 'label_2' in label or 'pos' in label: return 'Positive'
+# --- LOGIC ---
+def map_sentiment(label):
+    if 'label_0' in str(label).lower() or 'neg' in str(label).lower(): return 'Negative'
+    if 'label_2' in str(label).lower() or 'pos' in str(label).lower(): return 'Positive'
     return 'Neutral'
 
-def analyze_data(df):
+def analyze_sentiment(df):
     if df.empty: return df
-    texts = df['title'].tolist()
-    # Batch processing
-    results = sentiment_pipeline(texts, truncation=True, max_length=512)
-    df['sentiment'] = [map_label(res['label']) for res in results]
-    df['score'] = [res['score'] for res in results]
+    try:
+        results = sentiment_pipeline(df['Title'].tolist(), truncation=True, max_length=512)
+        df['sentiment'] = [map_sentiment(r['label']) for r in results]
+        df['score'] = [r['score'] for r in results]
+    except Exception as e:
+        st.error(f"AI Error: {e}")
+        df['sentiment'] = "Neutral"
+        df['score'] = 0.5
     return df
 
-def fetch_data_boosted(base_query):
-    all_data = []
+def fetch_serper_data(query, country_code, api_key):
+    """Profesjonalne pobieranie danych z Google via Serper.dev"""
+    url = "https://google.serper.dev/search"
     
-    # 1. GOOGLE NEWS (Multi-Region Strategy)
-    # Scanning multiple markets for broader context
-    regions = [('pl', 'PL'), ('en', 'GB'), ('fr', 'FR'), ('en', 'US')]
+    # Parametry zapytania (gl = geo location, hl = host language)
+    payload = json.dumps({
+        "q": query,
+        "gl": country_code.lower(),
+        "num": 20, # Pobieramy 20 wyników na kraj
+        "tbs": "qdr:m6" # Ostatnie 6 miesięcy (qdr:m6)
+    })
     
-    status_text = st.empty()
-    
-    for lang, country in regions:
-        status_text.text(f"📡 Scanning Google News ({country})...")
-        try:
-            gn = GoogleNews(lang=lang, country=country)
-            search = gn.search(base_query, when="90d") # 90 days lookback
-            for entry in search['entries']:
-                all_data.append({
-                    'source': f'Google News ({country})', 
-                    'title': entry.title, 
-                    'date': entry.published,
-                    'link': entry.link
+    headers = {
+        'X-API-KEY': api_key,
+        'Content-Type': 'application/json'
+    }
+
+    try:
+        response = requests.request("POST", url, headers=headers, data=payload)
+        results = response.json()
+        
+        parsed_data = []
+        
+        # 1. Wyniki organiczne (Organic Search)
+        if 'organic' in results:
+            for r in results['organic']:
+                parsed_data.append({
+                    'Source': 'Web/Organic',
+                    'Title': r.get('title', 'No Title'),
+                    'Link': r.get('link', '#'),
+                    'Snippet': r.get('snippet', ''),
+                    'Date': r.get('date', 'Recent') # Serper czasem daje datę tekstową "2 days ago"
                 })
-        except: continue
+                
+        # 2. Wyniki News (Top Stories) - jeśli są
+        if 'news' in results:
+             for r in results['news']:
+                parsed_data.append({
+                    'Source': 'Google News',
+                    'Title': r.get('title', 'No Title'),
+                    'Link': r.get('link', '#'),
+                    'Snippet': r.get('snippet', ''),
+                    'Date': r.get('date', 'Recent')
+                })
+                
+        return parsed_data
+    except Exception as e:
+        st.error(f"API Connection Error: {e}")
+        return []
 
-    # 2. DUCKDUCKGO - "Deep Dive" (Reviews, Forums, Social)
-    extra_queries = [
-        f'{base_query} site:reddit.com',
-        f'{base_query} site:gowork.pl',
-        f'{base_query} site:trustpilot.com',
-        f'{base_query} reviews',
-        f'{base_query} opinions'
-    ]
-    
-    with DDGS() as ddgs:
-        for q in extra_queries:
-            status_text.text(f"🕵️ Deep Search: {q}...")
-            try:
-                # max_results limited to avoid timeouts
-                results = list(ddgs.text(q, max_results=10)) 
-                for r in results:
-                    all_data.append({
-                        'source': 'Social/Web', 
-                        'title': r['title'] + " - " + r['body'][:50], 
-                        'date': None, 
-                        'link': r['href']
-                    })
-            except: continue
-            time.sleep(0.5)
+# --- UI LAYOUT ---
+st.title("💎 Lyreco Strategic Intel [Premium API]")
+st.markdown("**Powered by Serper.dev (Google Engine)** - No more blocks, just data.")
 
-    status_text.empty()
-    
-    df = pd.DataFrame(all_data)
-    if not df.empty:
-        df = df.drop_duplicates(subset=['title'])
-        df['date'] = pd.to_datetime(df['date'], errors='coerce', utc=True)
-    
-    return df
-
-# --- UI LAYOUT (ENGLISH) ---
-st.title("🌍 Lyreco Global Sentiment AI [Deep Dive]")
-
+# Sidebar Configuration
 with st.sidebar:
-    st.header("Analysis Parameters")
-    query = st.text_input("Brand / Topic:", "Lyreco")
-    st.caption("Mode: Deep Search (News + Reddit + Employee Reviews + Trustpilot)")
-    run_btn = st.button("🚀 LAUNCH ENGINE", type="primary")
-    st.markdown("---")
-    st.markdown("Powered by **Streamlit & HuggingFace**")
-
-if run_btn:
-    df = fetch_data_boosted(query)
+    st.header("Settings")
     
-    if df.empty:
-        st.error("No data found. Try a different keyword.")
+    # Sprawdzenie klucza
+    if not API_KEY:
+        st.warning("⚠️ Brak klucza API w Secrets!")
+        user_key = st.text_input("Podaj klucz Serper.dev ręcznie:", type="password")
+        if user_key:
+            API_KEY = user_key
     else:
-        df = analyze_data(df)
-        
-        # --- TOP KPI ---
-        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-        kpi1.metric("Total Mentions", len(df))
-        
-        pos_count = len(df[df['sentiment'] == 'Positive'])
-        neg_count = len(df[df['sentiment'] == 'Negative'])
-        
-        kpi2.metric("Positive", pos_count, delta=None)
-        kpi3.metric("Negative", neg_count, delta_color="inverse")
-        
-        try:
-            top_sent = df['sentiment'].mode()[0]
-        except: top_sent = "N/A"
-        kpi4.metric("Dominant Sentiment", top_sent)
-        
-        st.divider()
+        st.success("✅ API Key Loaded from Secrets")
+    
+    st.divider()
+    
+    # Konfiguracja rynków
+    MARKETS = {
+        "France 🇫🇷": {"code": "fr", "query": "Lyreco e-commerce avis"},
+        "Poland 🇵🇱": {"code": "pl", "query": "Lyreco platforma opinie"},
+        "UK 🇬🇧": {"code": "gb", "query": "Lyreco webshop reviews"},
+        "Italy 🇮🇹": {"code": "it", "query": "Lyreco recensioni servizio"},
+    }
+    
+    selected_markets = st.multiselect("Markets to Scan:", list(MARKETS.keys()), default=list(MARKETS.keys()))
+    run_btn = st.button("🚀 LAUNCH PREMIUM SCAN", type="primary")
 
-        # --- CHARTS ---
-        c1, c2 = st.columns([1, 2])
+# Main Logic
+if run_btn:
+    if not API_KEY:
+        st.error("Stop! Musisz podać klucz API, aby uruchomić tryb Premium.")
+    else:
+        all_data = []
+        progress = st.progress(0)
         
-        with c1:
-            st.subheader("Sentiment Distribution")
-            fig_pie = px.pie(df, names='sentiment', color='sentiment', hole=0.4,
-                             color_discrete_map={'Positive':'#00CC96', 'Neutral':'#AB63FA', 'Negative':'#EF553B'})
-            st.plotly_chart(fig_pie, use_container_width=True)
+        for i, market in enumerate(selected_markets):
+            config = MARKETS[market]
+            st.toast(f"Scanning {market} via Google API...")
             
-        with c2:
-            st.subheader("Source Analysis")
-            source_counts = df['source'].value_counts().reset_index()
-            source_counts.columns = ['Source', 'Count']
-            fig_bar = px.bar(source_counts, x='Count', y='Source', orientation='h', text_auto=True)
-            fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
-            st.plotly_chart(fig_bar, use_container_width=True)
-
-        # --- DATA TABLE ---
-        st.subheader("📢 Live Mention Log")
+            # Pobieranie danych
+            raw_data = fetch_serper_data(config['query'], config['code'], API_KEY)
+            
+            # Dodanie etykiety rynku
+            for item in raw_data:
+                item['Market'] = market
+                all_data.append(item)
+            
+            progress.progress((i + 1) / len(selected_markets))
+            
+        progress.empty()
         
-        st.dataframe(
-            df[['source', 'title', 'sentiment', 'score', 'link']],
-            column_config={
-                "link": st.column_config.LinkColumn("URL"),
-                "score": st.column_config.ProgressColumn("AI Confidence", format="%.2f", min_value=0, max_value=1),
-                "title": "Headline / Snippet",
-                "source": "Origin"
-            },
-            use_container_width=True
-        )
-
-else:
-    st.info("👈 Click the **'LAUNCH ENGINE'** button in the sidebar to start the global scan.")
+        # Przetwarzanie
+        if all_data:
+            df = pd.DataFrame(all_data)
+            df = analyze_sentiment(df)
+            
+            # --- DASHBOARD ---
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Premium Data Points", len(df))
+            k2.metric("Market Coverage", len(selected_markets))
+            positive_share = len(df[df['sentiment'] == 'Positive']) / len(df) * 100
+            k3.metric("Positive Sentiment", f"{positive_share:.1f}%")
+            
+            st.divider()
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                st.subheader("🌍 Mentions by Market")
+                fig_bar = px.bar(df['Market'].value_counts().reset_index(), x='count', y='Market', 
+                                 orientation='h', text_auto=True, color='count')
+                st.plotly_chart(fig_bar, use_container_width=True)
+            
+            with c2:
+                st.subheader("🧠 AI Sentiment Analysis")
+                fig_pie = px.pie(df, names='sentiment', color='sentiment', 
+                                 color_discrete_map={'Positive':'#00CC96', 'Neutral':'#AB63FA', 'Negative':'#EF553B'})
+                st.plotly_chart(fig_pie, use_container_width=True)
+                
+            st.subheader("📑 Verifiable Sources (Clickable)")
+            st.dataframe(
+                df[['Market', 'Title', 'sentiment', 'Link']],
+                column_config={"Link": st.column_config.LinkColumn("Source URL")},
+                use_container_width=True
+            )
+            
+        else:
+            st.warning("API nie zwróciło wyników. Sprawdź limity na serper.dev.")
