@@ -123,11 +123,16 @@ with st.sidebar:
     
     selected_markets = st.multiselect("Select Markets:", list(MARKETS.keys()), default=["France 🇫🇷", "Poland 🇵🇱"])
     
-    st.info("""
-    ℹ️ **How it works:**
-    For every selected market, the system executes 4 distinct deep-searches (General, HR, Ops, CSR) looking back 12 months.
+    st.markdown("---")
     
-    **Expect ~100-150 data points per market.**
+    # --- DATA SOURCES SECTION ---
+    st.markdown("### 📡 Data Sources")
+    st.info("""
+    The system aggregates intelligence from:
+    * **Professional:** LinkedIn, Official Press
+    * **Reviews:** Trustpilot, Glassdoor, GoWork, Indeed
+    * **Social:** Reddit, Forums, Quora
+    * **Media:** Google News, Industry Blogs
     """)
     
     st.warning("⚠️ Warning: This mode consumes 4 API credits per selected market.")
