@@ -15,12 +15,12 @@ st.set_page_config(page_title="Lyreco Big Data Monitor", layout="wide", page_ico
 # --- API KEYS ---
 try:
     API_KEY = st.secrets.get("SERPER_API_KEY", "")
-    CLAUDE_KEY = st.secrets.get("CLAUDE_KEY", "")
+    ANTHROPIC_KEY = st.secrets.get("CLAUDE_KEY", "")
 except:
     API_KEY = None
-    CLAUDE_KEY = None
+    ANTHROPIC_KEY = None
 
-# --- AI MODEL (Sentyment) ---
+# --- AI MODEL (Sentiment) ---
 @st.cache_resource
 def load_model():
     return pipeline("sentiment-analysis", 
@@ -51,6 +51,7 @@ def fetch_massive_data(market_code, lang, api_key):
     url = "https://google.serper.dev/search"
     all_items = []
     
+    # We keep local search terms to fetch relevant regional data, but UI/Reports are in English
     topics = {
         "General Brand": "Lyreco",
         "HR & Careers": f"Lyreco {lang == 'pl' and 'praca opinie' or 'careers reviews'}",
@@ -83,23 +84,22 @@ def generate_executive_summary(df, api_key):
     try:
         client = Anthropic(api_key=api_key)
         
-        # Bierzemy próbkę danych, żeby nie przekroczyć limitu tokenów
         negatives = df[df['sentiment'] == 'Negative']['Title'].tolist()[:15]
         positives = df[df['sentiment'] == 'Positive']['Title'].tolist()[:10]
         
         prompt = f"""
-        Jesteś Głównym Analitykiem Danych w firmie Lyreco. 
-        Oto najnowsze dane ze skanowania internetu.
+        You are the Chief Data Analyst at Lyreco. 
+        Here is the latest data from our web scraping and social listening tool.
         
-        Negatywne sygnały ({len(negatives)}):
+        Negative signals ({len(negatives)}):
         {negatives}
         
-        Pozytywne sygnały ({len(positives)}):
+        Positive signals ({len(positives)}):
         {positives}
         
-        Napisz krótkie, profesjonalne 'Executive Summary' (ok. 4-5 zdań) dla Zarządu.
-        Wypunktuj 2 najczęściej pojawiające się problemy (jeśli wynikają z danych) i 1 pozytyw.
-        Pisz w języku polskim, w tonie biznesowym i doradczym.
+        Write a short, professional 'Executive Summary' (about 4-5 sentences) for the Board of Directors.
+        Highlight the 2 most frequent problems (if applicable based on data) and 1 positive finding.
+        Write in English, maintaining a highly professional, business-oriented, and advisory tone.
         """
         
         message = client.messages.create(
@@ -110,11 +110,10 @@ def generate_executive_summary(df, api_key):
         )
         return message.content[0].text
     except Exception as e:
-        return f"Błąd generowania analizy AI: {str(e)}"
+        return f"Error generating AI summary: {str(e)}"
 
 # --- PDF GENERATOR ---
 def strip_accents(text):
-    # Usuwa ogonki (ą->a, ę->e) - niezbędne dla prostego generatora PDF by uniknąć crashy na DEMO
     return ''.join(c for c in unicodedata.normalize('NFD', text) if unicodedata.category(c) != 'Mn')
 
 def create_pdf_report(summary_text, total_records):
@@ -124,11 +123,10 @@ def create_pdf_report(summary_text, total_records):
     pdf.cell(200, 10, txt="Lyreco AI Monitor - Executive Summary", ln=True, align='C')
     
     pdf.set_font("Arial", 'I', 10)
-    pdf.cell(200, 10, txt=f"Liczba przeanalizowanych wpisow: {total_records}", ln=True, align='C')
+    pdf.cell(200, 10, txt=f"Total records analyzed: {total_records}", ln=True, align='C')
     pdf.ln(10)
     
     pdf.set_font("Arial", size=12)
-    # Dekodowanie bezpiecznego tekstu
     safe_text = strip_accents(summary_text).encode('latin-1', 'replace').decode('latin-1')
     pdf.multi_cell(0, 8, txt=safe_text)
     
@@ -145,8 +143,8 @@ with st.sidebar:
     if not API_KEY:
         API_KEY = st.text_input("Enter Serper API Key:", type="password")
         
-    if not CLAUDE_KEY:
-        CLAUDE_KEY = st.text_input("Enter Anthropic API Key (Claude 3):", type="password")
+    if not ANTHROPIC_KEY:
+        ANTHROPIC_KEY = st.text_input("Enter Anthropic API Key (Claude 3):", type="password")
         st.caption("Press ENTER after pasting your keys!")
     
     st.markdown("---")
@@ -183,33 +181,33 @@ if run_btn and API_KEY:
         df = pd.DataFrame(full_data)
         df = df.drop_duplicates(subset=['Title'])
         
-        # Filtrujemy strony Lyreco!
+        # Filter out Lyreco domains
         df = df[~df['Link'].str.contains('lyreco.com', na=False, case=False)]
         
         if df.empty:
-            st.warning("Brak danych po odfiltrowaniu domen Lyreco.")
+            st.warning("No data found after filtering out Lyreco domains.")
         else:
             with st.spinner(f"🧠 AI analyzing sentiment for {len(df)} records..."):
                 df = analyze_sentiment(df)
             
             # --- AI EXECUTIVE SUMMARY ---
             st.subheader("🤖 AI Executive Summary")
-            if CLAUDE_KEY:
-                with st.spinner("Claude 3 Haiku generuje wnioski dla Zarządu..."):
-                    ai_summary = generate_executive_summary(df, CLAUDE_KEY)
+            if ANTHROPIC_KEY:
+                with st.spinner("Claude 3 Haiku is generating insights for the Board..."):
+                    ai_summary = generate_executive_summary(df, ANTHROPIC_KEY)
                     st.success(ai_summary)
                     
-                    # Generowanie i pobieranie PDF
+                    # Generate and download PDF
                     pdf_path = create_pdf_report(ai_summary, len(df))
                     with open(pdf_path, "rb") as pdf_file:
                         st.download_button(
-                            label="📄 Pobierz Raport PDF",
+                            label="📄 Download PDF Report",
                             data=pdf_file,
                             file_name="Lyreco_Executive_Summary.pdf",
                             mime="application/pdf"
                         )
             else:
-                st.info("Wprowadź klucz Anthropic API w panelu bocznym, aby odblokować podsumowania AI oraz raporty PDF!")
+                st.info("Enter your Anthropic API Key in the sidebar to unlock AI summaries and PDF reports!")
                 
             st.divider()
                 
