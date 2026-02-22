@@ -44,18 +44,18 @@ def analyze_sentiment(df):
 def fetch_massive_data(market_code, lang, api_key):
     """
     'Verticals' Strategy: Fetching data by distinct topics to maximize volume.
-    Excluding internal domains to prevent false negative sentiment from FAQ/Support pages.
+    We removed -site: operators to avoid Serper API 400 errors. 
+    Domain filtering is now handled post-fetch via Pandas.
     """
     url = "https://google.serper.dev/search"
     all_items = []
     
     # Topic list - multiplies results x4 per country
-    # We added "-site:lyreco.com" to EXCLUDE the official domain and subdomains!
     topics = {
-        "General Brand": "Lyreco -site:lyreco.com",
-        "HR & Careers": f"Lyreco {lang == 'pl' and 'praca opinie' or 'careers reviews'} -site:lyreco.com",
-        "Logistics & Ops": f"Lyreco {lang == 'pl' and 'dostawa problem' or 'delivery issues'} -site:lyreco.com",
-        "CSR & Sustainability": f"Lyreco {lang == 'pl' and 'ekologia' or 'sustainability'} -site:lyreco.com"
+        "General Brand": "Lyreco",
+        "HR & Careers": f"Lyreco {lang == 'pl' and 'praca opinie' or 'careers reviews'}",
+        "Logistics & Ops": f"Lyreco {lang == 'pl' and 'dostawa problem' or 'delivery issues'}",
+        "CSR & Sustainability": f"Lyreco {lang == 'pl' and 'ekologia' or 'sustainability'}"
     }
 
     headers = {'X-API-KEY': api_key, 'Content-Type': 'application/json'}
@@ -71,8 +71,12 @@ def fetch_massive_data(market_code, lang, api_key):
 
         try:
             response = requests.request("POST", url, headers=headers, data=payload)
+            
+            # Diagnostic check
             if response.status_code != 200:
-                st.error(f"Błąd Serpera dla {category}: Status {response.status_code} | {response.text}")
+                st.error(f"API Error for {category}: Status {response.status_code} | {response.text}")
+                continue
+
             results = response.json()
             
             # Organic Results
@@ -95,7 +99,8 @@ def fetch_massive_data(market_code, lang, api_key):
                         'Snippet': r.get('snippet', ''),
                         'Source': 'News'
                     })
-        except: pass
+        except Exception as e: 
+            pass
         
     return all_items
 
@@ -112,6 +117,7 @@ with st.sidebar:
     
     if not API_KEY:
         API_KEY = st.text_input("Enter Serper API Key:", type="password")
+        st.caption("Press ENTER after pasting your key!")
     
     st.markdown("---")
     
@@ -167,59 +173,65 @@ if run_btn and API_KEY:
         df = pd.DataFrame(full_data)
         df = df.drop_duplicates(subset=['Title'])
         
-        with st.spinner(f"🧠 AI analyzing sentiment for {len(df)} records..."):
-            df = analyze_sentiment(df)
-            
-        # --- KPI BOARD ---
-        k1, k2, k3 = st.columns(3)
-        k1.metric("Total Data Points", len(df))
-        k2.metric("Active Markets", len(selected_markets))
-        k3.metric("Dominant Topic", df['Category'].mode()[0])
+        # --- OUR NEW FILTER (Replaces the blocked -site: operator) ---
+        # The tilde (~) means "Keep rows that DO NOT contain 'lyreco.com' in the Link"
+        df = df[~df['Link'].str.contains('lyreco.com', na=False, case=False)]
+        # -------------------------------------------------------------
         
-        st.divider()
-        
-        # --- CHARTS ---
-        c1, c2 = st.columns(2)
-        with c1:
-            st.subheader("📊 Volume by Category")
-            st.caption("Visualizes the volume of discussion across operational pillars. Colors represent categories, not sentiment.")
+        if df.empty:
+            st.warning("Data was fetched, but after filtering out 'lyreco.com', no results remained. Try expanding your search.")
+        else:
+            with st.spinner(f"🧠 AI analyzing sentiment for {len(df)} records..."):
+                df = analyze_sentiment(df)
+                
+            # --- KPI BOARD ---
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Total Data Points", len(df))
+            k2.metric("Active Markets", len(selected_markets))
+            k3.metric("Dominant Topic", df['Category'].mode()[0])
             
-            # Using a distinct color sequence for categories to avoid confusion with sentiment
-            fig = px.treemap(
-                df, 
-                path=['Market', 'Category'], 
-                color='Category',
-                color_discrete_sequence=px.colors.qualitative.Bold # Distinct, non-sentiment colors
+            st.divider()
+            
+            # --- CHARTS ---
+            c1, c2 = st.columns(2)
+            with c1:
+                st.subheader("📊 Volume by Category")
+                st.caption("Visualizes the volume of discussion across operational pillars. Colors represent categories, not sentiment.")
+                
+                fig = px.treemap(
+                    df, 
+                    path=['Market', 'Category'], 
+                    color='Category',
+                    color_discrete_sequence=px.colors.qualitative.Bold 
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+            with c2:
+                st.subheader("❤️ Global Sentiment")
+                st.caption("AI-driven emotional analysis of all collected data points.")
+                
+                fig2 = px.pie(
+                    df, 
+                    names='sentiment', 
+                    color='sentiment', 
+                    color_discrete_map={
+                        'Positive':'#00CC96', 
+                        'Negative':'#EF553B', 
+                        'Neutral':'#cccccc' 
+                    }
+                )
+                st.plotly_chart(fig2, use_container_width=True)
+                
+            # --- DATA TABLE ---
+            st.subheader("🗄️ Intelligence Database")
+            st.dataframe(
+                df[['Market', 'Category', 'Title', 'sentiment', 'Link']],
+                column_config={
+                    "Link": st.column_config.LinkColumn("Source URL")
+                },
+                use_container_width=True
             )
-            st.plotly_chart(fig, use_container_width=True)
             
-        with c2:
-            st.subheader("❤️ Global Sentiment")
-            st.caption("AI-driven emotional analysis of all collected data points.")
-            
-            # Ensuring Neutral is GRAY as requested
-            fig2 = px.pie(
-                df, 
-                names='sentiment', 
-                color='sentiment', 
-                color_discrete_map={
-                    'Positive':'#00CC96', 
-                    'Negative':'#EF553B', 
-                    'Neutral':'#cccccc' # Gray
-                }
-            )
-            st.plotly_chart(fig2, use_container_width=True)
-            
-        # --- DATA TABLE ---
-        st.subheader("🗄️ Intelligence Database")
-        st.dataframe(
-            df[['Market', 'Category', 'Title', 'sentiment', 'Link']],
-            column_config={
-                "Link": st.column_config.LinkColumn("Source URL")
-            },
-            use_container_width=True
-        )
-        
     else:
         st.error("No data found. Please check your API limits or try different markets.")
 
