@@ -44,16 +44,18 @@ def analyze_sentiment(df):
 def fetch_massive_data(market_code, lang, api_key):
     """
     'Verticals' Strategy: Fetching data by distinct topics to maximize volume.
+    Excluding internal domains to prevent false negative sentiment from FAQ/Support pages.
     """
     url = "https://google.serper.dev/search"
     all_items = []
     
     # Topic list - multiplies results x4 per country
+    # We added "-site:lyreco.com" to EXCLUDE the official domain and subdomains!
     topics = {
-        "General Brand": "Lyreco",
-        "HR & Careers": f"Lyreco {lang == 'pl' and 'praca opinie' or 'careers reviews'}",
-        "Logistics & Ops": f"Lyreco {lang == 'pl' and 'dostawa problem' or 'delivery issues'}",
-        "CSR & Sustainability": f"Lyreco {lang == 'pl' and 'ekologia' or 'sustainability'}"
+        "General Brand": "Lyreco -site:lyreco.com",
+        "HR & Careers": f"Lyreco {lang == 'pl' and 'praca opinie' or 'careers reviews'} -site:lyreco.com",
+        "Logistics & Ops": f"Lyreco {lang == 'pl' and 'dostawa problem' or 'delivery issues'} -site:lyreco.com",
+        "CSR & Sustainability": f"Lyreco {lang == 'pl' and 'ekologia' or 'sustainability'} -site:lyreco.com"
     }
 
     headers = {'X-API-KEY': api_key, 'Content-Type': 'application/json'}
