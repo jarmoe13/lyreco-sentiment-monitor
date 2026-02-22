@@ -145,8 +145,8 @@ with st.sidebar:
     if not API_KEY:
         API_KEY = st.text_input("Enter Serper API Key:", type="password")
         
-    if not ANTHROPIC_KEY:
-        ANTHROPIC_KEY = st.text_input("Enter Anthropic API Key (Claude 3):", type="password")
+    if not CLAUDE_KEY:
+        CLAUDE_KEY = st.text_input("Enter Anthropic API Key (Claude 3):", type="password")
         st.caption("Press ENTER after pasting your keys!")
     
     st.markdown("---")
@@ -194,9 +194,9 @@ if run_btn and API_KEY:
             
             # --- AI EXECUTIVE SUMMARY ---
             st.subheader("🤖 AI Executive Summary")
-            if ANTHROPIC_KEY:
+            if CLAUDE_KEY:
                 with st.spinner("Claude 3 Haiku generuje wnioski dla Zarządu..."):
-                    ai_summary = generate_executive_summary(df, ANTHROPIC_KEY)
+                    ai_summary = generate_executive_summary(df, CLAUDE_KEY)
                     st.success(ai_summary)
                     
                     # Generowanie i pobieranie PDF
