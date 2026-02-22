@@ -15,10 +15,10 @@ st.set_page_config(page_title="Lyreco Big Data Monitor", layout="wide", page_ico
 # --- API KEYS ---
 try:
     API_KEY = st.secrets.get("SERPER_API_KEY", "")
-    ANTHROPIC_KEY = st.secrets.get("ANTHROPIC_API_KEY", "")
+    CLAUDE_KEY = st.secrets.get("CLAUDE_KEY", "")
 except:
     API_KEY = None
-    ANTHROPIC_KEY = None
+    CLAUDE_KEY = None
 
 # --- AI MODEL (Sentyment) ---
 @st.cache_resource
