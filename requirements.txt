@@ -1,8 +1,8 @@
 streamlit
 pandas
 plotly
-pygooglenews
-duckduckgo-search>=5.0
+requests
 transformers
 torch
-sentencepiece
+anthropic
+fpdf
