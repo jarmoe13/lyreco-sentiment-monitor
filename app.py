@@ -71,6 +71,8 @@ def fetch_massive_data(market_code, lang, api_key):
 
         try:
             response = requests.request("POST", url, headers=headers, data=payload)
+            if response.status_code != 200:
+                st.error(f"Błąd Serpera dla {category}: Status {response.status_code} | {response.text}")
             results = response.json()
             
             # Organic Results
