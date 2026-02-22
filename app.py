@@ -3,18 +3,24 @@ import pandas as pd
 import plotly.express as px
 import requests
 import json
+import tempfile
+import unicodedata
 from transformers import pipeline
+from anthropic import Anthropic
+from fpdf import FPDF
 
 # --- CONFIG ---
 st.set_page_config(page_title="Lyreco Big Data Monitor", layout="wide", page_icon="📈")
 
-# --- API KEY ---
+# --- API KEYS ---
 try:
-    API_KEY = st.secrets["SERPER_API_KEY"]
+    API_KEY = st.secrets.get("SERPER_API_KEY", "")
+    ANTHROPIC_KEY = st.secrets.get("ANTHROPIC_API_KEY", "")
 except:
     API_KEY = None
+    ANTHROPIC_KEY = None
 
-# --- AI MODEL ---
+# --- AI MODEL (Sentyment) ---
 @st.cache_resource
 def load_model():
     return pipeline("sentiment-analysis", 
@@ -42,15 +48,9 @@ def analyze_sentiment(df):
     return df
 
 def fetch_massive_data(market_code, lang, api_key):
-    """
-    'Verticals' Strategy: Fetching data by distinct topics to maximize volume.
-    We removed -site: operators to avoid Serper API 400 errors. 
-    Domain filtering is now handled post-fetch via Pandas.
-    """
     url = "https://google.serper.dev/search"
     all_items = []
     
-    # Topic list - multiplies results x4 per country
     topics = {
         "General Brand": "Lyreco",
         "HR & Careers": f"Lyreco {lang == 'pl' and 'praca opinie' or 'careers reviews'}",
@@ -62,91 +62,102 @@ def fetch_massive_data(market_code, lang, api_key):
 
     for category, query in topics.items():
         payload = json.dumps({
-            "q": query,
-            "gl": market_code,
-            "hl": lang,
-            "num": 40,       # Maximize fetch size
-            "tbs": "qdr:m12" # Lookback 12 months
+            "q": query, "gl": market_code, "hl": lang, "num": 40, "tbs": "qdr:m12"
         })
-
         try:
             response = requests.request("POST", url, headers=headers, data=payload)
-            
-            # Diagnostic check
-            if response.status_code != 200:
-                st.error(f"API Error for {category}: Status {response.status_code} | {response.text}")
-                continue
-
+            if response.status_code != 200: continue
             results = response.json()
-            
-            # Organic Results
             if 'organic' in results:
                 for r in results['organic']:
-                    all_items.append({
-                        'Category': category,
-                        'Title': r.get('title', ''),
-                        'Link': r.get('link', ''),
-                        'Snippet': r.get('snippet', ''),
-                        'Source': 'Web'
-                    })
-            # News Results
+                    all_items.append({'Category': category, 'Title': r.get('title', ''), 'Link': r.get('link', ''), 'Source': 'Web'})
             if 'news' in results:
                 for r in results['news']:
-                    all_items.append({
-                        'Category': 'News',
-                        'Title': r.get('title', ''),
-                        'Link': r.get('link', ''),
-                        'Snippet': r.get('snippet', ''),
-                        'Source': 'News'
-                    })
-        except Exception as e: 
-            pass
+                    all_items.append({'Category': 'News', 'Title': r.get('title', ''), 'Link': r.get('link', ''), 'Source': 'News'})
+        except Exception as e: pass
         
     return all_items
 
+# --- CLAUDE 3 HAIKU INTEGRATION ---
+def generate_executive_summary(df, api_key):
+    try:
+        client = Anthropic(api_key=api_key)
+        
+        # Bierzemy próbkę danych, żeby nie przekroczyć limitu tokenów
+        negatives = df[df['sentiment'] == 'Negative']['Title'].tolist()[:15]
+        positives = df[df['sentiment'] == 'Positive']['Title'].tolist()[:10]
+        
+        prompt = f"""
+        Jesteś Głównym Analitykiem Danych w firmie Lyreco. 
+        Oto najnowsze dane ze skanowania internetu.
+        
+        Negatywne sygnały ({len(negatives)}):
+        {negatives}
+        
+        Pozytywne sygnały ({len(positives)}):
+        {positives}
+        
+        Napisz krótkie, profesjonalne 'Executive Summary' (ok. 4-5 zdań) dla Zarządu.
+        Wypunktuj 2 najczęściej pojawiające się problemy (jeśli wynikają z danych) i 1 pozytyw.
+        Pisz w języku polskim, w tonie biznesowym i doradczym.
+        """
+        
+        message = client.messages.create(
+            model="claude-3-haiku-20240307",
+            max_tokens=400,
+            temperature=0.3,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return message.content[0].text
+    except Exception as e:
+        return f"Błąd generowania analizy AI: {str(e)}"
+
+# --- PDF GENERATOR ---
+def strip_accents(text):
+    # Usuwa ogonki (ą->a, ę->e) - niezbędne dla prostego generatora PDF by uniknąć crashy na DEMO
+    return ''.join(c for c in unicodedata.normalize('NFD', text) if unicodedata.category(c) != 'Mn')
+
+def create_pdf_report(summary_text, total_records):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(200, 10, txt="Lyreco AI Monitor - Executive Summary", ln=True, align='C')
+    
+    pdf.set_font("Arial", 'I', 10)
+    pdf.cell(200, 10, txt=f"Liczba przeanalizowanych wpisow: {total_records}", ln=True, align='C')
+    pdf.ln(10)
+    
+    pdf.set_font("Arial", size=12)
+    # Dekodowanie bezpiecznego tekstu
+    safe_text = strip_accents(summary_text).encode('latin-1', 'replace').decode('latin-1')
+    pdf.multi_cell(0, 8, txt=safe_text)
+    
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        pdf.output(tmp.name)
+        return tmp.name
+
 # --- UI LAYOUT ---
 st.title("📈 Lyreco Global: Big Data Volume Monitor")
-st.markdown("""
-This dashboard uses a **Multi-Vertical Scanning Strategy** to gather maximum intelligence volume. 
-Instead of a simple keyword search, it penetrates 4 key operational pillars for each market: 
-**General Brand, HR/Careers, Logistics, and Sustainability**.
-""")
 
 with st.sidebar:
     st.header("⚙️ Configuration")
     
     if not API_KEY:
         API_KEY = st.text_input("Enter Serper API Key:", type="password")
-        st.caption("Press ENTER after pasting your key!")
+        
+    if not ANTHROPIC_KEY:
+        ANTHROPIC_KEY = st.text_input("Enter Anthropic API Key (Claude 3):", type="password")
+        st.caption("Press ENTER after pasting your keys!")
     
     st.markdown("---")
     
     MARKETS = {
         "France 🇫🇷": {"code": "fr", "lang": "fr"},
         "Poland 🇵🇱": {"code": "pl", "lang": "pl"},
-        "UK 🇬🇧": {"code": "gb", "lang": "en"},
-        "Italy 🇮🇹": {"code": "it", "lang": "it"},
-        "Germany 🇩🇪": {"code": "de", "lang": "de"},
-        "Spain 🇪🇸": {"code": "es", "lang": "es"},
-        "Benelux 🇧🇪🇳🇱": {"code": "be", "lang": "nl"},
+        "UK 🇬🇧": {"code": "gb", "lang": "en"}
     }
     
     selected_markets = st.multiselect("Select Markets:", list(MARKETS.keys()), default=["France 🇫🇷", "Poland 🇵🇱"])
-    
-    st.markdown("---")
-    
-    # --- DATA SOURCES SECTION ---
-    st.markdown("### 📡 Data Sources")
-    st.info("""
-    The system aggregates intelligence from:
-    * **Professional:** LinkedIn, Official Press
-    * **Reviews:** Trustpilot, Glassdoor, GoWork, Indeed
-    * **Social:** Reddit, Forums, Quora
-    * **Media:** Google News, Industry Blogs
-    """)
-    
-    st.warning("⚠️ Warning: This mode consumes 4 API credits per selected market.")
-    
     run_btn = st.button("🚀 FETCH MASSIVE DATA", type="primary")
 
 if run_btn and API_KEY:
@@ -159,7 +170,6 @@ if run_btn and API_KEY:
         status_text.text(f"📡 Scanning ecosystem: {market}...")
         
         data = fetch_massive_data(config['code'], config['lang'], API_KEY)
-        
         for item in data:
             item['Market'] = market
             full_data.append(item)
@@ -173,67 +183,53 @@ if run_btn and API_KEY:
         df = pd.DataFrame(full_data)
         df = df.drop_duplicates(subset=['Title'])
         
-        # --- OUR NEW FILTER (Replaces the blocked -site: operator) ---
-        # The tilde (~) means "Keep rows that DO NOT contain 'lyreco.com' in the Link"
+        # Filtrujemy strony Lyreco!
         df = df[~df['Link'].str.contains('lyreco.com', na=False, case=False)]
-        # -------------------------------------------------------------
         
         if df.empty:
-            st.warning("Data was fetched, but after filtering out 'lyreco.com', no results remained. Try expanding your search.")
+            st.warning("Brak danych po odfiltrowaniu domen Lyreco.")
         else:
             with st.spinner(f"🧠 AI analyzing sentiment for {len(df)} records..."):
                 df = analyze_sentiment(df)
+            
+            # --- AI EXECUTIVE SUMMARY ---
+            st.subheader("🤖 AI Executive Summary")
+            if ANTHROPIC_KEY:
+                with st.spinner("Claude 3 Haiku generuje wnioski dla Zarządu..."):
+                    ai_summary = generate_executive_summary(df, ANTHROPIC_KEY)
+                    st.success(ai_summary)
+                    
+                    # Generowanie i pobieranie PDF
+                    pdf_path = create_pdf_report(ai_summary, len(df))
+                    with open(pdf_path, "rb") as pdf_file:
+                        st.download_button(
+                            label="📄 Pobierz Raport PDF",
+                            data=pdf_file,
+                            file_name="Lyreco_Executive_Summary.pdf",
+                            mime="application/pdf"
+                        )
+            else:
+                st.info("Wprowadź klucz Anthropic API w panelu bocznym, aby odblokować podsumowania AI oraz raporty PDF!")
                 
-            # --- KPI BOARD ---
-            k1, k2, k3 = st.columns(3)
-            k1.metric("Total Data Points", len(df))
-            k2.metric("Active Markets", len(selected_markets))
-            k3.metric("Dominant Topic", df['Category'].mode()[0])
-            
             st.divider()
-            
+                
             # --- CHARTS ---
             c1, c2 = st.columns(2)
             with c1:
                 st.subheader("📊 Volume by Category")
-                st.caption("Visualizes the volume of discussion across operational pillars. Colors represent categories, not sentiment.")
-                
-                fig = px.treemap(
-                    df, 
-                    path=['Market', 'Category'], 
-                    color='Category',
-                    color_discrete_sequence=px.colors.qualitative.Bold 
-                )
+                fig = px.treemap(df, path=['Market', 'Category'], color='Category', color_discrete_sequence=px.colors.qualitative.Bold)
                 st.plotly_chart(fig, use_container_width=True)
                 
             with c2:
                 st.subheader("❤️ Global Sentiment")
-                st.caption("AI-driven emotional analysis of all collected data points.")
-                
-                fig2 = px.pie(
-                    df, 
-                    names='sentiment', 
-                    color='sentiment', 
-                    color_discrete_map={
-                        'Positive':'#00CC96', 
-                        'Negative':'#EF553B', 
-                        'Neutral':'#cccccc' 
-                    }
-                )
+                fig2 = px.pie(df, names='sentiment', color='sentiment', color_discrete_map={'Positive':'#00CC96', 'Negative':'#EF553B', 'Neutral':'#cccccc'})
                 st.plotly_chart(fig2, use_container_width=True)
                 
             # --- DATA TABLE ---
             st.subheader("🗄️ Intelligence Database")
-            st.dataframe(
-                df[['Market', 'Category', 'Title', 'sentiment', 'Link']],
-                column_config={
-                    "Link": st.column_config.LinkColumn("Source URL")
-                },
-                use_container_width=True
-            )
+            st.dataframe(df[['Market', 'Category', 'Title', 'sentiment', 'Link']], use_container_width=True)
             
     else:
-        st.error("No data found. Please check your API limits or try different markets.")
-
+        st.error("No data found.")
 elif run_btn and not API_KEY:
-    st.error("Please provide an API Key in the sidebar.")
+    st.error("Please provide a Serper API Key in the sidebar.")
